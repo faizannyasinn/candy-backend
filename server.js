@@ -14,54 +14,44 @@ const io = socketIo(server, {
   }
 });
 
-let rooms = {};
+let rooms = {}; // { code: [socket1, socket2] }
+let players = {}; // { socketId: { room, role } }
 
 io.on("connection", (socket) => {
-  console.log("Connected:", socket.id);
+  console.log("User connected:", socket.id);
 
   socket.on("join-room", (roomCode, name) => {
-    if (!rooms[roomCode]) {
-      rooms[roomCode] = {
-        players: [],
-        poisonIndex: null,
-        currentTurn: null
-      };
-    }
+    if (!rooms[roomCode]) rooms[roomCode] = [];
+    if (rooms[roomCode].length >= 2) return;
 
-    rooms[roomCode].players.push({ id: socket.id, name });
+    rooms[roomCode].push(socket.id);
+    players[socket.id] = {
+      room: roomCode,
+      role: rooms[roomCode].length === 1 ? "player1" : "player2"
+    };
+
     socket.join(roomCode);
+    socket.emit("assign-role", players[socket.id].role);
 
-    if (rooms[roomCode].players.length === 2) {
-      io.to(roomCode).emit("player-joined", rooms[roomCode].players.map(p => p.id));
+    if (rooms[roomCode].length === 2) {
+      io.to(roomCode).emit("player-joined");
     }
   });
 
-  socket.on("poison-chosen", ({ roomCode, poisonIndex }) => {
-    rooms[roomCode].poisonIndex = poisonIndex;
-    rooms[roomCode].currentTurn = rooms[roomCode].players[0].id;
-    io.to(roomCode).emit("poison-chosen");
-  });
-
-  socket.on("play-turn", ({ roomCode, candyIndex }) => {
-    const room = rooms[roomCode];
-    if (!room) return;
-
-    if (candyIndex === room.poisonIndex) {
-      const loser = socket.id;
-      const winner = room.players.find(p => p.id !== loser)?.id;
-      io.to(roomCode).emit("game-over", { winnerId: winner });
-      delete rooms[roomCode];
-    } else {
-      const next = room.players.find(p => p.id !== socket.id)?.id;
-      room.currentTurn = next;
-      io.to(roomCode).emit("turn-played", { nextPlayerId: next });
-    }
+  socket.on("poison-selected", (role) => {
+    const player = players[socket.id];
+    if (!player) return;
+    io.to(player.room).emit("poison-selected", role);
   });
 
   socket.on("disconnect", () => {
-    for (const code in rooms) {
-      rooms[code].players = rooms[code].players.filter(p => p.id !== socket.id);
-      if (rooms[code].players.length === 0) delete rooms[code];
+    console.log("User disconnected:", socket.id);
+    const player = players[socket.id];
+    if (player) {
+      const room = player.room;
+      rooms[room] = rooms[room].filter(id => id !== socket.id);
+      if (rooms[room].length === 0) delete rooms[room];
+      delete players[socket.id];
     }
   });
 });
