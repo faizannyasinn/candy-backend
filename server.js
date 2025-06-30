@@ -1,48 +1,71 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
+const socketIo = require("socket.io");
 const cors = require("cors");
 
 const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
-const io = new Server(server, {
+const io = socketIo(server, {
   cors: {
-    origin: "*", // allow all origins
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
 
-let rooms = {}; // roomCode: [{ id, name }, { id, name }]
+let rooms = {};
 
 io.on("connection", (socket) => {
-  console.log("✅ User connected:", socket.id);
+  console.log("Connected:", socket.id);
 
   socket.on("join-room", (roomCode, name) => {
-    if (!rooms[roomCode]) rooms[roomCode] = [];
+    if (!rooms[roomCode]) {
+      rooms[roomCode] = {
+        players: [],
+        poisonIndex: null,
+        currentTurn: null
+      };
+    }
 
-    rooms[roomCode].push({ id: socket.id, name });
+    rooms[roomCode].players.push({ id: socket.id, name });
     socket.join(roomCode);
 
-    console.log(`👤 ${name} joined room ${roomCode}`);
+    if (rooms[roomCode].players.length === 2) {
+      io.to(roomCode).emit("player-joined", rooms[roomCode].players.map(p => p.id));
+    }
+  });
 
-    if (rooms[roomCode].length === 2) {
-      io.to(roomCode).emit("player-joined");
+  socket.on("poison-chosen", ({ roomCode, poisonIndex }) => {
+    rooms[roomCode].poisonIndex = poisonIndex;
+    rooms[roomCode].currentTurn = rooms[roomCode].players[0].id;
+    io.to(roomCode).emit("poison-chosen");
+  });
+
+  socket.on("play-turn", ({ roomCode, candyIndex }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+
+    if (candyIndex === room.poisonIndex) {
+      const loser = socket.id;
+      const winner = room.players.find(p => p.id !== loser)?.id;
+      io.to(roomCode).emit("game-over", { winnerId: winner });
+      delete rooms[roomCode];
+    } else {
+      const next = room.players.find(p => p.id !== socket.id)?.id;
+      room.currentTurn = next;
+      io.to(roomCode).emit("turn-played", { nextPlayerId: next });
     }
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ User disconnected:", socket.id);
-    for (const room in rooms) {
-      rooms[room] = rooms[room].filter(player => player.id !== socket.id);
-      if (rooms[room].length === 0) {
-        delete rooms[room];
-      }
+    for (const code in rooms) {
+      rooms[code].players = rooms[code].players.filter(p => p.id !== socket.id);
+      if (rooms[code].players.length === 0) delete rooms[code];
     }
   });
 });
 
 server.listen(3000, () => {
-  console.log("🚀 Server running on port 3000");
+  console.log("Server running on port 3000");
 });
