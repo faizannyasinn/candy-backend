@@ -1,73 +1,45 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
+const express = require("express");
+const http = require("http");
+const socketIo = require("socket.io");
+const cors = require("cors");
 
 const app = express();
+app.use(cors());
+
 const server = http.createServer(app);
-const io = new Server(server, {
+const io = socketIo(server, {
   cors: {
-    origin: '*'
+    origin: "*", // Allow frontend
+    methods: ["GET", "POST"]
   }
 });
 
-const rooms = {};
+let rooms = {}; // { roomCode: [socketId1, socketId2] }
 
-io.on('connection', socket => {
-  socket.on('createRoom', ({ playerName }, callback) => {
-    const roomCode = Math.floor(10000 + Math.random() * 90000).toString();
-    rooms[roomCode] = {
-      players: [{ id: socket.id, name: playerName }],
-      poison: {}
-    };
+io.on("connection", (socket) => {
+  console.log("A user connected:", socket.id);
+
+  socket.on("join-room", (roomCode) => {
+    if (!rooms[roomCode]) rooms[roomCode] = [];
+
+    rooms[roomCode].push(socket.id);
     socket.join(roomCode);
-    callback({ roomCode });
-  });
 
-  socket.on('joinRoom', ({ roomCode, playerName }, callback) => {
-    const room = rooms[roomCode];
-    if (room && room.players.length === 1) {
-      room.players.push({ id: socket.id, name: playerName });
-      socket.join(roomCode);
-      io.to(roomCode).emit('playerJoined', { players: room.players });
-      callback({ success: true });
-    } else {
-      callback({ success: false });
+    // Notify other player if both joined
+    if (rooms[roomCode].length === 2) {
+      io.to(roomCode).emit("player-joined");
     }
   });
 
-  socket.on('choosePoison', ({ roomCode, candyIndex }) => {
-    if (rooms[roomCode]) {
-      rooms[roomCode].poison[socket.id] = candyIndex;
-      if (Object.keys(rooms[roomCode].poison).length === 2) {
-        io.to(roomCode).emit('startTurns');
-      }
-    }
-  });
-
-  socket.on('chooseCandy', ({ roomCode, candyIndex }) => {
-    const room = rooms[roomCode];
-    const opponent = room.players.find(p => p.id !== socket.id);
-    if (room.poison[opponent.id] === candyIndex) {
-      io.to(socket.id).emit('gameResult', { result: 'lost' });
-      io.to(opponent.id).emit('gameResult', { result: 'won' });
-    } else {
-      io.to(roomCode).emit('nextTurn');
-    }
-  });
-
-  socket.on('disconnect', () => {
-    for (let code in rooms) {
-      const index = rooms[code].players.findIndex(p => p.id === socket.id);
-      if (index !== -1) {
-        rooms[code].players.splice(index, 1);
-        io.to(code).emit('opponentLeft');
-        break;
-      }
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+    for (const room in rooms) {
+      rooms[room] = rooms[room].filter(id => id !== socket.id);
+      if (rooms[room].length === 0) delete rooms[room];
     }
   });
 });
 
 server.listen(3000, () => {
-  console.log('Server running on port 3000');
+  console.log("Server running on port 3000");
 });
