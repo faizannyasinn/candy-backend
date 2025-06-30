@@ -14,41 +14,74 @@ const io = socketIo(server, {
   }
 });
 
-let rooms = {}; // { roomCode: [player1, player2] }
-let poisonSelections = {}; // { roomCode: { socketId: poisonIndex } }
+let rooms = {}; // roomCode => { players: [socket.id], poison: {}, names: {} }
 
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
   socket.on("join-room", (roomCode, name) => {
-    if (!rooms[roomCode]) rooms[roomCode] = [];
-    rooms[roomCode].push({ id: socket.id, name });
+    if (!rooms[roomCode]) {
+      rooms[roomCode] = {
+        players: [],
+        poison: {},
+        names: {}
+      };
+    }
 
+    const room = rooms[roomCode];
+
+    // Limit to 2 players
+    if (room.players.length >= 2) {
+      socket.emit("room-full");
+      return;
+    }
+
+    room.players.push(socket.id);
+    room.names[socket.id] = name;
     socket.join(roomCode);
 
-    if (rooms[roomCode].length === 2) {
-      poisonSelections[roomCode] = {};
-      const [player1, player2] = rooms[roomCode];
-      io.to(player1.id).emit("start-poison-selection", { isFirst: true });
-      io.to(player2.id).emit("start-poison-selection", { isFirst: false });
+    console.log(`Player ${name} joined room ${roomCode}`);
+
+    // Notify both players when 2 have joined
+    if (room.players.length === 2) {
+      io.to(roomCode).emit("player-joined");
     }
   });
 
-  socket.on("poison-selected", ({ roomCode, poisonIndex }) => {
-    if (!poisonSelections[roomCode]) poisonSelections[roomCode] = {};
-    poisonSelections[roomCode][socket.id] = poisonIndex;
+  socket.on("select-poison", (roomCode, index) => {
+    const room = rooms[roomCode];
+    if (!room) return;
 
-    if (Object.keys(poisonSelections[roomCode]).length === 2) {
+    room.poison[socket.id] = index;
+
+    // Notify opponent that this player selected poison
+    socket.to(roomCode).emit("opponent-selected-poison");
+
+    // When both selected, start game
+    if (
+      room.players.length === 2 &&
+      room.poison[room.players[0]] !== undefined &&
+      room.poison[room.players[1]] !== undefined
+    ) {
       io.to(roomCode).emit("start-game");
     }
   });
 
   socket.on("disconnect", () => {
-    for (let room in rooms) {
-      rooms[room] = rooms[room].filter(p => p.id !== socket.id);
-      if (rooms[room].length === 0) {
-        delete rooms[room];
-        delete poisonSelections[room];
+    console.log("User disconnected:", socket.id);
+
+    for (const code in rooms) {
+      const room = rooms[code];
+      if (room.players.includes(socket.id)) {
+        room.players = room.players.filter(id => id !== socket.id);
+        delete room.names[socket.id];
+        delete room.poison[socket.id];
+
+        // If no one left, delete the room
+        if (room.players.length === 0) {
+          delete rooms[code];
+        }
+        break;
       }
     }
   });
