@@ -14,7 +14,22 @@ const io = socketIo(server, {
   }
 });
 
-let rooms = {};
+let rooms = {}; // Holds game state per room
+
+function generateBoard() {
+  const colors = [
+    "red", "blue", "green", "orange", "purple", "pink",
+    "yellow", "brown", "cyan", "magenta", "lime", "maroon",
+    "navy", "olive", "teal"
+  ];
+  return colors.map((color, i) => ({
+    id: i,
+    color,
+    top: Math.floor(Math.random() * 350) + "px",
+    left: Math.floor(Math.random() * 350) + "px",
+    eaten: false
+  }));
+}
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
@@ -45,21 +60,20 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("poison-selected", ({ roomCode, poisonIndex }) => {
+  socket.on("poison-selected", ({ roomCode, poisonId }) => {
     const room = rooms[roomCode];
-    if (!room) return;
+    if (!room || room.gameOver) return;
 
     if (!room.poison.first) {
-      room.poison.first = { id: socket.id, index: poisonIndex };
-
+      room.poison.first = { id: socket.id, poisonId };
       const secondPlayer = room.players.find(p => p.id !== socket.id);
       if (secondPlayer) {
         io.to(secondPlayer.id).emit("poison-select", room.board);
       }
     } else if (!room.poison.second && socket.id !== room.poison.first.id) {
-      room.poison.second = { id: socket.id, index: poisonIndex };
+      room.poison.second = { id: socket.id, poisonId };
 
-      // Both poisons selected, start game
+      // Both poisons selected — start game
       io.to(roomCode).emit("start-game", {
         board: room.board,
         turn: room.turn
@@ -67,37 +81,35 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("candy-clicked", ({ roomCode, index }) => {
+  socket.on("candy-clicked", ({ roomCode, candyId }) => {
     const room = rooms[roomCode];
     if (!room || room.gameOver) return;
 
     if (socket.id !== room.turn) return;
 
-    if (
-      room.poison.first.index === index &&
-      socket.id !== room.poison.first.id
-    ) {
+    const candyIndex = room.board.findIndex(c => c.id === candyId);
+    if (candyIndex === -1 || room.board[candyIndex].eaten) return;
+
+    const isOpponentPoison =
+      (room.poison.first.poisonId === candyId && socket.id !== room.poison.first.id) ||
+      (room.poison.second.poisonId === candyId && socket.id !== room.poison.second.id);
+
+    if (isOpponentPoison) {
       room.gameOver = true;
-      io.to(socket.id).emit("game-over", "You lost!");
-      io.to(room.players.find(p => p.id !== socket.id).id).emit("game-over", "You win!");
+      const loser = socket.id;
+      const winner = room.players.find(p => p.id !== loser).id;
+
+      io.to(loser).emit("game-over", "You lost!");
+      io.to(winner).emit("game-over", "You win!");
       return;
     }
 
-    if (
-      room.poison.second.index === index &&
-      socket.id !== room.poison.second.id
-    ) {
-      room.gameOver = true;
-      io.to(socket.id).emit("game-over", "You lost!");
-      io.to(room.players.find(p => p.id !== socket.id).id).emit("game-over", "You win!");
-      return;
-    }
-
-    // Remove candy from board
-    room.board[index].eaten = true;
+    // Candy eaten
+    room.board[candyIndex].eaten = true;
 
     // Switch turn
     room.turn = room.players.find(p => p.id !== socket.id).id;
+
     io.to(roomCode).emit("update-board", {
       board: room.board,
       turn: room.turn
@@ -115,19 +127,6 @@ io.on("connection", (socket) => {
     }
   });
 });
-
-function generateBoard() {
-  const colors = [
-    "red", "blue", "green", "orange", "purple", "pink",
-    "yellow", "brown", "cyan", "magenta", "lime", "maroon",
-    "navy", "olive", "teal"
-  ];
-  return colors.map((color, i) => ({
-    id: i,
-    color,
-    eaten: false
-  }));
-}
 
 server.listen(3000, () => {
   console.log("Server running on port 3000");
