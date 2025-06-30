@@ -14,44 +14,42 @@ const io = socketIo(server, {
   }
 });
 
-let rooms = {}; // { code: [socket1, socket2] }
-let players = {}; // { socketId: { room, role } }
+let rooms = {}; // { roomCode: [player1, player2] }
+let poisonSelections = {}; // { roomCode: { socketId: poisonIndex } }
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("A user connected:", socket.id);
 
   socket.on("join-room", (roomCode, name) => {
     if (!rooms[roomCode]) rooms[roomCode] = [];
-    if (rooms[roomCode].length >= 2) return;
-
-    rooms[roomCode].push(socket.id);
-    players[socket.id] = {
-      room: roomCode,
-      role: rooms[roomCode].length === 1 ? "player1" : "player2"
-    };
+    rooms[roomCode].push({ id: socket.id, name });
 
     socket.join(roomCode);
-    socket.emit("assign-role", players[socket.id].role);
 
     if (rooms[roomCode].length === 2) {
-      io.to(roomCode).emit("player-joined");
+      poisonSelections[roomCode] = {};
+      const [player1, player2] = rooms[roomCode];
+      io.to(player1.id).emit("start-poison-selection", { isFirst: true });
+      io.to(player2.id).emit("start-poison-selection", { isFirst: false });
     }
   });
 
-  socket.on("poison-selected", (role) => {
-    const player = players[socket.id];
-    if (!player) return;
-    io.to(player.room).emit("poison-selected", role);
+  socket.on("poison-selected", ({ roomCode, poisonIndex }) => {
+    if (!poisonSelections[roomCode]) poisonSelections[roomCode] = {};
+    poisonSelections[roomCode][socket.id] = poisonIndex;
+
+    if (Object.keys(poisonSelections[roomCode]).length === 2) {
+      io.to(roomCode).emit("start-game");
+    }
   });
 
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-    const player = players[socket.id];
-    if (player) {
-      const room = player.room;
-      rooms[room] = rooms[room].filter(id => id !== socket.id);
-      if (rooms[room].length === 0) delete rooms[room];
-      delete players[socket.id];
+    for (let room in rooms) {
+      rooms[room] = rooms[room].filter(p => p.id !== socket.id);
+      if (rooms[room].length === 0) {
+        delete rooms[room];
+        delete poisonSelections[room];
+      }
     }
   });
 });
